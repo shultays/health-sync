@@ -1,11 +1,11 @@
 # Health Sync - Google Fitbit AI Coach Killer
 
-Health Sync is a small Android app for exporting Health Connect data to a
-single JSON file in Google Drive.
+Health Sync is a small Android app for exporting aggregated Health Connect data
+to Google Sheets.
 
 It is designed for personal use with AI assistants: your phone reads Health
-Connect, writes `health_data.json`, and your assistant can read that file from
-Drive.
+Connect, updates a private spreadsheet, and your assistant can read the `Daily`
+and `Workouts` tabs.
 
 ## Why This Exists
 
@@ -14,7 +14,7 @@ Health Sync takes a different route:
 
 - your phone owns the export
 - Health Connect remains the source of truth
-- Google Drive stores one readable JSON file
+- Google Sheets stores compact daily and workout summaries
 - an AI assistant can explain the data with your own instructions
 
 This is not a medical device and it does not clone every proprietary Fitbit or
@@ -25,12 +25,12 @@ daily coaching without needing a custom backend or paid health-dashboard layer.
 
 1. Fitbit or another health app syncs data into Health Connect.
 2. Health Sync requests Health Connect read permissions.
-3. You choose or create `health_data.json` through Android's system file picker.
-4. The app writes summaries and raw Health Connect records into that same file.
+3. You connect your Google account and the app creates a Health Sync spreadsheet.
+4. The app updates today's summary and recent workout rows in its tabs.
 5. Optional background sync keeps the file updated.
 
-No backend server is required. No Google OAuth client is required. No API keys
-are stored in the app.
+No backend server or API key is stored in the app. Google Sheets access uses
+the signed-in user's OAuth permission; Google Cloud OAuth setup is required.
 
 ## Download APK
 
@@ -46,23 +46,26 @@ be available on the device and permissions to be granted by the user.
 
 ## Data Model
 
-The exported file has three top-level sections:
+The spreadsheet has two tabs:
 
-- `profile`: device ID and last update timestamp.
-- `snapshots`: compact daily summaries.
-- `latest_full_export`: the latest detailed export, including raw records.
+- `Daily`: one row per Stockholm calendar day, with activity, calories, resting
+  heart rate, sleep, and distance summaries.
+- `Workouts`: one row per workout, with local date/time, type, duration, and
+  available average/maximum heart rate.
 
-The summary fields use Health Connect's aggregate API. This helps avoid common
-mistakes such as summing raw records across UTC boundaries or overlapping
-records.
+The app uses Health Connect aggregates rather than exporting individual
+heart-rate samples or summing overlapping raw records. It updates existing
+dates/workouts instead of creating duplicates and retains up to 90 days.
+Missing values remain blank. Daily summaries are recorded for the current date
+when a sync runs; past dates are not backfilled.
 
 Daily summaries prefer the wearable/app source when it is present, currently
 Fitbit first, then Google Fit/Health sources. This prevents phone step records
 and wearable step records from being mixed together when the goal is to match
 the visible Fitbit/Google Health card.
 
-The raw records remain available for deeper analysis, source checks, and timing
-details.
+Workout heart-rate values are aggregate averages and maxima; individual samples
+are not exported.
 
 ## Claude Project Setup
 
@@ -71,101 +74,34 @@ Create a Claude Project for health coaching:
 1. Open Claude.
 2. Create a new Project, for example `Health Coach`.
 3. In Project instructions, paste the prompt below.
-4. In Project files or connected sources, add your Google Drive
-   `health_data.json` file.
+4. Add your private Health Sync Google spreadsheet as a connected source.
 5. Ask Claude questions grounded in the file, such as:
    - "What changed in my sleep last night?"
    - "Am I progressing toward 8,000 steps consistently?"
    - "Compare today's recovery signals with yesterday."
 
-Use your own private Google Drive URL. Do not commit it to this repository.
+Use your own private spreadsheet URL. Do not commit it to this repository.
 
 ```text
-You are reading my Health Connect export from Google Drive, usually named health_data.json. Use this guide to navigate it accurately.
+You are reading my Health Connect export in a private Google Sheets spreadsheet. Use the Daily tab for daily trends and Workouts for exercise sessions.
 
-Top-level structure:
-- profile: device metadata and last update time.
-- snapshots: compact daily summaries. Use this first for quick answers about daily totals.
-- latest_full_export: the richest current export. Use this for detailed analysis, raw records, source checks, and timing.
+Daily:
+- Each row is a Stockholm calendar date. Use this for activity and recovery trends.
+- Missing cells mean unavailable data; do not treat them as zero.
+- The app updates today's row when a sync runs; older dates are not backfilled.
 
-Use only evidence in the file. Do not guess missing data. If a field or record type is empty, missing, stale, blocked, or unclear, say that directly.
+Workouts:
+- Each row is a workout with local date/time, type, duration, and available average/maximum heart rate.
+- Heart-rate values are workout aggregates; individual samples are not exported.
 
-Important interpretation rules:
-- Prefer snapshots or latest_full_export summary fields for daily totals.
-- The summary fields are produced from the Health Connect aggregate API and are the authoritative source for daily totals.
-- Do not sum raw_records to answer daily totals unless explicitly doing a raw-record audit.
-- raw_records can overlap, use UTC timestamps, and may not match Health/Fitbit local-day cards.
-- Use raw_records for detail, timing, source checks, and deeper analysis.
-- Timestamps ending in Z are UTC. Prefer local fields when available, especially sleep.start_local and sleep.end_local.
-- distance_health_connect_km is Health Connect's recorded distance, not a step-derived estimate.
-- heart_rate_sample_avg_bpm is an average of available heart-rate samples, not necessarily a clinical whole-day average.
-- exercise_session_minutes means duration of recorded exercise sessions, not all active time.
-- For HRV, prefer hrv_rmssd.median_ms when comparing to Fitbit/Health-style HRV cards. hrv_rmssd.average_ms is a separate arithmetic average.
-
-Key summary fields:
-- steps
-- calories_total_kcal
-- calories_active_kcal, if present
-- heart_rate_sample_avg_bpm
-- heart_rate_resting_bpm
-- distance_health_connect_km
-- exercise_session_minutes
-- sleep.duration_hours
-- sleep.sleep_date_local
-- sleep.start_local
-- sleep.end_local
-- sleep.start_utc
-- sleep.end_utc
-- sleep.stages_minutes
-- hrv_rmssd.median_ms
-- hrv_rmssd.average_ms
-- hrv_rmssd.min_ms
-- hrv_rmssd.max_ms
-- hrv_rmssd.sample_count
-- selected_summary_origin
-- all_sources_audit
-- summary_data_origins
-- granted_permissions
-- extraction_errors
-- analysis_guidance
-
-latest_full_export:
-- latest_full_export.raw_record_counts tells which raw data types actually contain data.
-- latest_full_export.raw_records contains arrays grouped by Health Connect record type.
-- latest_full_export.extraction_errors explains missing, blocked, or failed record types.
-- latest_full_export.analysis_guidance gives file-specific interpretation rules. Follow it.
-
-Current raw record types that may contain useful data:
-- StepsRecord: count, startTime, endTime.
-- DistanceRecord: distance.meters, distance.kilometers, startTime, endTime.
-- HeartRateRecord: samples array with beatsPerMinute and time.
-- HeartRateVariabilityRmssdRecord: heartRateVariabilityMillis and time.
-- RestingHeartRateRecord: beatsPerMinute and time.
-- RespiratoryRateRecord: rate and time.
-- SleepSessionRecord: startTime, endTime, stages.
-- TotalCaloriesBurnedRecord: energy.kilocalories, startTime, endTime.
-- WeightRecord: weight.kilograms and weight.pounds.
-
-Metadata:
-- Each raw record may include metadata.dataOrigin.packageName. Use this to identify the source app.
-- Do not treat metadata IDs as health metrics.
-- Empty arrays mean no data was exported for that type.
-
-When comparing with Fitbit or Google Health screenshots:
-- Match local dates, not UTC dates.
-- Prefer summary fields for steps, distance, calories, sleep duration, and resting HR.
-- If selected_summary_origin is present, use those summary fields for card comparison.
-- Treat all_sources_audit as debugging information, not the user-facing total.
-- Use hrv_rmssd.median_ms for HRV card comparison.
-- Use sleep.start_local and sleep.end_local for sleep schedule comparison.
+Use only available spreadsheet values. Blank cells mean unavailable data, not zero.
+Use Stockholm dates for comparisons, and do not diagnose medical conditions.
 
 Answer style:
-- Start with the factual takeaway.
-- Cite exact fields, dates, and metrics used.
-- Separate evidence from interpretation.
-- Be energetic and encouraging, but never exaggerate.
-- If data is missing, stale, or unclear, say so directly.
-- Do not diagnose medical conditions. For concerning patterns, suggest discussing with a qualified clinician.
+- Start with the factual takeaway and cite dates/metrics used.
+- Separate evidence from interpretation; if data is missing, say so.
+- Be encouraging without exaggerating. For concerning patterns, suggest
+  discussing them with a qualified clinician.
 ```
 
 ## Supported Data
@@ -192,7 +128,7 @@ Ignored by default:
 
 - generated APK files
 - signing keys and keystores
-- `health_data.json`
+- `health_data.json` (legacy local exports)
 - local Android config
 - Gradle build output
 - screenshots and OS metadata
@@ -211,7 +147,6 @@ artifact. Tagged releases publish `HealthSync.apk` for direct download.
 ## Background Sync Reliability
 
 Auto sync uses WorkManager and runs sync as foreground data-sync work so Android
-is less likely to kill the job mid-export. When auto sync is enabled, the app
-also triggers one immediate sync, asks for notification permission where needed,
-and requests battery-optimization exemption. Android can still delay periodic
-work, but these settings reduce stale Drive data.
+is less likely to kill the job mid-export. When enabled, the app syncs once and
+then updates the spreadsheet about every 15 minutes. Android can still delay
+periodic work, but this keeps current-day data fresh.

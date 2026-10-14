@@ -4,15 +4,15 @@ plugins {
 }
 
 android {
-    namespace = "com.healthsync"
+    namespace = "com.healthsynceng"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.healthsync"
+        applicationId = "com.healthsynceng"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.0.1"
+        versionCode = 4
+        versionName = "1.0.3"
     }
 
     signingConfigs {
@@ -62,7 +62,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
-    // HTTP client for Google Drive REST API
+    // HTTP client for Google Sheets REST API
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.google.android.gms:play-services-auth:21.2.0")
 
 }

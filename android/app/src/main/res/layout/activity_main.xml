@@ -47,7 +47,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="Health Connect to Google Drive"
+                android:text="Health Connect to Google Sheets"
                 android:textColor="@color/muted_ink"
                 android:textSize="15sp" />
 
@@ -89,11 +89,11 @@
             app:iconTint="@android:color/white" />
 
         <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnConnectDrive"
+            android:id="@+id/btnConnectSheets"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
-            android:text="Connect Google Drive File"
+            android:text="Connect Google Sheets"
             app:backgroundTint="@color/drive_blue"
             app:icon="@drawable/ic_drive"
             app:iconTint="@android:color/white" />

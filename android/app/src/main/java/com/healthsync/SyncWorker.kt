@@ -1,4 +1,4 @@
-package com.healthsync
+package com.healthsynceng
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -23,7 +23,8 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         return try {
             val snapshot = manager.readTodaySnapshot()
             withContext(Dispatchers.IO) {
-                DriveClient.syncSnapshot(applicationContext, snapshot)
+                val token = SheetsClient.accessToken(applicationContext)
+                SheetsClient.syncSnapshot(applicationContext, snapshot, token)
             }
             Result.success()
         } catch (e: Exception) {
@@ -37,7 +38,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_sync)
             .setContentTitle("Health Sync")
-            .setContentText("Updating health_data.json")
+            .setContentText("Updating Google Sheets")
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
@@ -62,7 +63,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             "Health sync",
             NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = "Shows when Health Sync is updating your Drive export."
+            description = "Shows when Health Sync is updating your Google Sheets export."
         }
         manager.createNotificationChannel(channel)
     }

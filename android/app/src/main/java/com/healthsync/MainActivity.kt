@@ -145,8 +145,8 @@ class MainActivity : AppCompatActivity() {
                     updateStatus(
                         "Synced to Google Sheets!\n" +
                         "Steps: ${snapshot.steps ?: "--"}\n" +
-                        "Resting HR: ${snapshot.heartRateResting ?: "--"} bpm\n" +
-                        "Calories: ${snapshot.caloriesTotal ?: "--"} kcal\n" +
+                        "Avg HR: ${snapshot.heartRateAverage ?: "--"} bpm\n" +
+                        "Activity kcal: ${snapshot.caloriesActive ?: "--"}\n" +
                         "Sleep: ${snapshot.sleepDurationMinutes?.let { "${it / 60}h ${it % 60}m" } ?: "--"}\n" +
                         "Workouts: ${snapshot.workouts.size}"
                     )

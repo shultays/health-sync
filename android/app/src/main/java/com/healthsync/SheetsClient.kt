@@ -13,9 +13,7 @@ import org.json.JSONObject
 import java.io.IOException
 import java.time.LocalDate
 import java.time.ZoneId
-import java.time.ZonedDateTime
 import java.time.format.DateTimeParseException
-import java.util.Locale
 
 object SheetsClient {
 
@@ -32,13 +30,13 @@ object SheetsClient {
         "Date",
         "Steps",
         "Exercise min",
-        "Active kcal",
-        "Total kcal",
-        "Resting HR",
-        "Sleep h",
-        "Sleep start",
-        "Sleep end",
-        "Distance km"
+        "Activity kcal",
+        "Avg HR",
+        "Total sleep h",
+        "Distance km",
+        "Awake HR",
+        "Exercise HR",
+        "Sleep HR"
     )
     private val workoutHeader = listOf(
         "Date",
@@ -110,8 +108,27 @@ object SheetsClient {
             ?: throw IOException("Google Sheets is not connected. Tap 'Connect Google Sheets' first.")
         val cutoff = LocalDate.now(ZoneId.of("Europe/Stockholm")).minusDays(HISTORY_DAYS - 1)
         val existing = getValues(spreadsheetId, accessToken)
-        val dailyExisting = existing.optJSONArray(0)?.rowsAfterHeader().orEmpty()
-        val workoutExisting = existing.optJSONArray(1)?.rowsAfterHeader().orEmpty()
+        val changes = planChanges(existing, snapshot, cutoff)
+        if (changes.isNotEmpty()) updateValues(spreadsheetId, accessToken, changes)
+    }
+
+    internal fun planChanges(existing: JSONArray, snapshot: HealthSnapshot, cutoff: LocalDate): List<ValueRange> {
+        val dailyValues = existing.optJSONObject(0)?.optJSONArray("values") ?: JSONArray()
+        val dailyOriginal = dailyValues.rowsAfterHeader()
+        val oldHeader = dailyValues.optJSONArray(0) ?: JSONArray()
+        // Match by header so old averages move to E, while resting values are discarded.
+        val dailyExisting = dailyOriginal.map { row ->
+            dailyHeader.map { name ->
+                val aliases = when (name) {
+                    "Activity kcal" -> setOf(name, "Active kcal")
+                    "Total sleep h" -> setOf(name, "Sleep h")
+                    else -> setOf(name)
+                }
+                val index = (0 until oldHeader.length()).firstOrNull { oldHeader.optString(it) in aliases }
+                if (index == null) "" else row.getOrNull(index) ?: ""
+            }
+        }
+        val workoutExisting = existing.optJSONObject(1)?.optJSONArray("values")?.rowsAfterHeader().orEmpty()
 
         val dailyByDate = linkedMapOf<String, List<Any>>()
         val dailyUnkeyed = mutableListOf<List<Any>>()
@@ -124,7 +141,28 @@ object SheetsClient {
                 dailyByDate[date] = row
             }
         }
-        dailyByDate[snapshot.date] = dailyRow(snapshot)
+        val incoming = dailyRow(snapshot).toMutableList()
+        dailyByDate[snapshot.date]?.let { saved ->
+            // Missing source values must not erase previously exported data.
+            incoming.indices.drop(1).forEach { index ->
+                if (incoming[index] == "") incoming[index] = saved.getOrNull(index) ?: ""
+            }
+            val savedSteps = saved.getOrNull(1)?.toString()?.toDoubleOrNull()
+            val newSteps = incoming[1].toString().toDoubleOrNull()
+            if (savedSteps != null && newSteps != null && newSteps <= savedSteps + 100) {
+                incoming[1] = saved[1]
+            }
+        }
+        dailyByDate[snapshot.date] = incoming
+        snapshot.sleepMinutesByDate.forEach { (date, minutes) ->
+            val parsed = parseDate(date)
+            if (parsed != null && !parsed.isBefore(cutoff) && parsed <= LocalDate.parse(snapshot.date)) {
+                val row = (dailyByDate[date] ?: listOf(date)).toMutableList()
+                while (row.size < dailyHeader.size) row.add("")
+                row[5] = roundToTwoDecimals(minutes / 60.0)
+                dailyByDate[date] = row
+            }
+        }
 
         val workoutsByKey = linkedMapOf<String, List<Any>>()
         workoutExisting.forEach { row ->
@@ -145,31 +183,47 @@ object SheetsClient {
         val workoutRows = listOf(workoutHeader) + workoutsByKey.values
             .sortedWith(compareBy({ it.getOrNull(0).toString() }, { it.getOrNull(1).toString() }))
 
-        val paddedDailyRows = padRows(dailyRows, dailyHeader.size)
-            .padToRowCount(dailyExisting.size + 1, dailyHeader.size)
+        // Clear obsolete trailing export columns during migration.
+        val dailyWidth = maxOf(dailyHeader.size, dailyValues.optJSONArray(0)?.length() ?: 0)
+        val paddedDailyRows = padRows(dailyRows, dailyWidth)
+            .padToRowCount(dailyOriginal.size + 1, dailyWidth)
         val paddedWorkoutRows = padRows(workoutRows, workoutHeader.size)
             .padToRowCount(workoutExisting.size + 1, workoutHeader.size)
-        updateValues(
-            spreadsheetId,
-            accessToken,
-            listOf(
-                ValueRange("Daily!A1:J${paddedDailyRows.size}", paddedDailyRows),
-                ValueRange("Workouts!A1:F${paddedWorkoutRows.size}", paddedWorkoutRows)
-            )
-        )
+        return changedCells("Daily", dailyValues, paddedDailyRows) +
+            changedCells("Workouts", existing.optJSONObject(1)?.optJSONArray("values") ?: JSONArray(), paddedWorkoutRows)
+    }
+
+    private fun changedCells(
+        sheet: String,
+        existing: JSONArray,
+        rows: List<List<Any>>
+    ): List<ValueRange> = buildList {
+        rows.forEachIndexed { rowIndex, row ->
+            row.forEachIndexed { columnIndex, value ->
+                val previous = existing.optJSONArray(rowIndex)?.opt(columnIndex) ?: ""
+                val oldNumber = previous.toString().toDoubleOrNull()
+                val newNumber = value.toString().toDoubleOrNull()
+                val equal = if (oldNumber != null && newNumber != null) oldNumber == newNumber
+                    else previous.toString() == value.toString()
+                if (!equal) {
+                    val column = ('A'.code + columnIndex).toChar()
+                    add(ValueRange("$sheet!$column${rowIndex + 1}", listOf(listOf(value))))
+                }
+            }
+        }
     }
 
     private fun dailyRow(snapshot: HealthSnapshot): List<Any> = listOf(
         snapshot.date,
         snapshot.steps ?: "",
         snapshot.activeMinutes ?: "",
-        snapshot.caloriesActive ?: "",
-        snapshot.caloriesTotal ?: "",
-        snapshot.heartRateResting ?: "",
-        snapshot.sleepDurationMinutes?.let { roundToOneDecimal(it / 60.0) } ?: "",
-        snapshot.sleepStart?.let(::stockholmTime).orEmpty(),
-        snapshot.sleepEnd?.let(::stockholmTime).orEmpty(),
-        snapshot.distanceMeters?.let { roundToTwoDecimals(it / 1000.0) } ?: ""
+        snapshot.caloriesActive?.let(::roundToTwoDecimals) ?: "",
+        snapshot.heartRateAverage ?: "",
+        snapshot.sleepDurationMinutes?.let { roundToTwoDecimals(it / 60.0) } ?: "",
+        snapshot.distanceMeters?.let { roundToTwoDecimals(it / 1000.0) } ?: "",
+        snapshot.heartRateAwake ?: "",
+        snapshot.heartRateExercise ?: "",
+        snapshot.heartRateSleep ?: ""
     )
 
     private fun workoutRow(workout: WorkoutSummary): List<Any> = listOf(
@@ -180,15 +234,6 @@ object SheetsClient {
         workout.averageHeartRate ?: "",
         workout.maximumHeartRate ?: ""
     )
-
-    private fun stockholmTime(value: String): String = try {
-        ZonedDateTime.parse(value).withZoneSameInstant(ZoneId.of("Europe/Stockholm"))
-            .toLocalTime().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm", Locale.ROOT))
-    } catch (_: DateTimeParseException) {
-        ""
-    }
-
-    private fun roundToOneDecimal(value: Double): Double = kotlin.math.round(value * 10) / 10
 
     private fun roundToTwoDecimals(value: Double): Double = kotlin.math.round(value * 100) / 100
 
@@ -221,7 +266,7 @@ object SheetsClient {
             ?: throw IOException("Google Sheets returned no sheet data.")
     }
 
-    private data class ValueRange(val range: String, val rows: List<List<Any>>)
+    internal data class ValueRange(val range: String, val rows: List<List<Any>>)
 
     private fun updateValues(
         spreadsheetId: String,

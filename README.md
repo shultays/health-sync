@@ -48,7 +48,7 @@ be available on the device and permissions to be granted by the user.
 
 The spreadsheet has two tabs:
 
-- `Daily`: one row per Stockholm calendar day, with activity, calories, resting
+- `Daily`: one row per Stockholm calendar day, with activity, calories, average
   heart rate, sleep, and distance summaries.
 - `Workouts`: one row per workout, with local date/time, type, duration, and
   available average/maximum heart rate.
@@ -56,8 +56,8 @@ The spreadsheet has two tabs:
 The app uses Health Connect aggregates rather than exporting individual
 heart-rate samples or summing overlapping raw records. It updates existing
 dates/workouts instead of creating duplicates and retains up to 90 days.
-Missing values remain blank. Daily summaries are recorded for the current date
-when a sync runs; past dates are not backfilled.
+Missing values remain blank. Activity summaries are recorded for the current date. Sleep totals also
+update recent past dates using the session end date.
 
 Daily summaries prefer the wearable/app source when it is present, currently
 Fitbit first, then Google Fit/Health sources. This prevents phone step records
@@ -88,7 +88,7 @@ You are reading my Health Connect export in a private Google Sheets spreadsheet.
 Daily:
 - Each row is a Stockholm calendar date. Use this for activity and recovery trends.
 - Missing cells mean unavailable data; do not treat them as zero.
-- The app updates today's row when a sync runs; older dates are not backfilled.
+- Activity updates today's row; sleep totals also update recent past dates.
 
 Workouts:
 - Each row is a workout with local date/time, type, duration, and available average/maximum heart rate.
@@ -150,3 +150,30 @@ Auto sync uses WorkManager and runs sync as foreground data-sync work so Android
 is less likely to kill the job mid-export. When enabled, the app syncs once and
 then updates the spreadsheet about every 15 minutes. Android can still delay
 periodic work, but this keeps current-day data fresh.
+
+### Export updates
+
+Daily rows are matched by Stockholm date, so a new day gets its own row.
+Only changed cells are written; an unchanged sync does not edit the spreadsheet.
+Total kcal is no longer exported; existing sheets migrate on the next sync.
+Steps update only when they exceed the saved count by more than 100 (150 stays
+until at least 251). Missing daily values preserve previously exported values.
+
+Daily exports Avg HR from ordinary heart-rate samples in place of Resting HR.
+Activity kcal and heart-rate aggregates use all available Health
+Connect sources independently of the source selected for steps. Activity kcal
+keeps two decimal places. Historical activity rows are not backfilled; sleep totals are.
+
+Total sleep h sums completed sleep-session durations by their end date in
+Europe/Stockholm, including split nights and naps. Overlapping sessions count
+once. Sleep start/end columns are removed on sync. Sleep history is read for
+90 days with history access, otherwise 30 days. No sleep records means blank.
+
+Daily HR columns (BPM): Avg HR is the Health Connect daily aggregate; Awake HR
+is the sample average outside recorded sleep and exercise intervals; Exercise
+HR is the duration-weighted mean of available workout averages for workouts
+starting that day; Sleep HR averages samples within all sleep sessions ending
+that day, including the previous evening. Context HR columns update for today.
+Intervals include their start and exclude their end. Identical timestamp/BPM
+samples count once. Missing qualifying readings remain blank. Awake HR is not
+resting HR; incomplete session records can affect classification.

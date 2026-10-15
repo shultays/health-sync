@@ -20,7 +20,7 @@ import kotlin.reflect.KClass
 data class HealthSnapshot(
     val date: String,
     val steps: Long?,
-    val caloriesActive: Long?,
+    val caloriesActive: Double?,
     val caloriesTotal: Long?,
     val heartRateResting: Int?,
     val distanceMeters: Long?,
@@ -28,7 +28,12 @@ data class HealthSnapshot(
     val sleepDurationMinutes: Long?,
     val sleepStart: String?,
     val sleepEnd: String?,
-    val workouts: List<WorkoutSummary>
+    val workouts: List<WorkoutSummary>,
+    val heartRateAverage: Int? = null,
+    val sleepMinutesByDate: Map<String, Long> = emptyMap(),
+    val heartRateAwake: Int? = null,
+    val heartRateExercise: Int? = null,
+    val heartRateSleep: Int? = null
 )
 
 data class WorkoutSummary(
@@ -125,22 +130,29 @@ class HealthConnectManager(private val context: Context) {
         val now = Instant.now()
         val todayRange = TimeRangeFilter.between(startOfDay, now)
 
-        // Sleep: look back 24h to catch last night
-        val sleepRange = TimeRangeFilter.between(
-            now.minusSeconds(86400),
-            now
-        )
-
-        val sleep = readOptional { readSleep(sleepRange) }
         val summary = readOptional { readDailySummary(todayRange) }
         val historyDays = if (
             HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY in grantedPermissions()
         ) WORKOUT_HISTORY_DAYS else MIN_WORKOUT_HISTORY_DAYS
+        // Read complete sessions, including those starting before their wake-up date.
+        val sleepRange = TimeRangeFilter.between(
+            today.minusDays(historyDays).atStartOfDay(zone).toInstant(), now
+        )
+        val sleepSessions = readOptional { readSleepSessions(sleepRange) }.orEmpty()
+        val sleepTotals = SleepTotals.byWakeDate(sleepSessions, now)
         val workoutRange = TimeRangeFilter.between(
             now.minusSeconds(historyDays * 24 * 60 * 60),
             now
         )
-        val workouts = readWorkouts(workoutRange, zone)
+        val (workouts, exerciseSessions) = readWorkouts(workoutRange, zone)
+        val todaysSleep = sleepSessions.filter { (_, end) ->
+            end <= now && end.atZone(zone).toLocalDate() == today
+        }
+        val heartStart = minOf(startOfDay, todaysSleep.minOfOrNull { it.first } ?: startOfDay)
+        val samples = readOptional { readHeartSamples(TimeRangeFilter.between(heartStart, now)) }.orEmpty()
+        val contextualHr = ContextHeartRate.calculate(
+            samples, todaysSleep, sleepSessions, exerciseSessions, workouts, today, now
+        )
 
         return HealthSnapshot(
             date = today.toString(),
@@ -150,10 +162,15 @@ class HealthConnectManager(private val context: Context) {
             heartRateResting = summary?.heartRateResting,
             distanceMeters = summary?.distanceMeters,
             activeMinutes = summary?.exerciseMinutes,
-            sleepDurationMinutes = sleep?.durationMinutes ?: summary?.sleepDurationMinutes,
-            sleepStart = sleep?.start,
-            sleepEnd = sleep?.end,
-            workouts = workouts
+            sleepDurationMinutes = sleepTotals[today.toString()],
+            sleepStart = null,
+            sleepEnd = null,
+            workouts = workouts,
+            heartRateAverage = summary?.heartRateAverage,
+            sleepMinutesByDate = sleepTotals,
+            heartRateAwake = contextualHr.awake,
+            heartRateExercise = contextualHr.exercise,
+            heartRateSleep = contextualHr.sleep
         )
     }
 
@@ -167,9 +184,10 @@ class HealthConnectManager(private val context: Context) {
 
     data class DailySummary(
         val steps: Long?,
-        val caloriesActive: Long?,
+        val caloriesActive: Double?,
         val caloriesTotal: Long?,
         val heartRateResting: Int?,
+        val heartRateAverage: Int?,
         val distanceMeters: Long?,
         val exerciseMinutes: Long?,
         val sleepDurationMinutes: Long?,
@@ -191,13 +209,14 @@ class HealthConnectManager(private val context: Context) {
 
         return DailySummary(
             steps = result[StepsRecord.COUNT_TOTAL],
-            caloriesActive = result[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]
-                ?.inKilocalories
-                ?.toLong(),
+            // Calories and heart rate may be written by a different app than steps.
+            caloriesActive = allSourcesResult[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]
+                ?.inKilocalories,
             caloriesTotal = result[TotalCaloriesBurnedRecord.ENERGY_TOTAL]
                 ?.inKilocalories
                 ?.toLong(),
-            heartRateResting = result[RestingHeartRateRecord.BPM_AVG]?.toInt(),
+            heartRateResting = allSourcesResult[RestingHeartRateRecord.BPM_AVG]?.toInt(),
+            heartRateAverage = allSourcesResult[HeartRateRecord.BPM_AVG]?.toInt(),
             distanceMeters = result[DistanceRecord.DISTANCE_TOTAL]?.inMeters?.toLong(),
             exerciseMinutes = result[ExerciseSessionRecord.EXERCISE_DURATION_TOTAL]
                 ?.toMinutes(),
@@ -257,7 +276,7 @@ class HealthConnectManager(private val context: Context) {
     private suspend fun readWorkouts(
         range: TimeRangeFilter,
         zone: ZoneId
-    ): List<WorkoutSummary> {
+    ): Pair<List<WorkoutSummary>, List<Pair<Instant, Instant>>> {
         val sessions = mutableListOf<ExerciseSessionRecord>()
         var pageToken: String? = null
 
@@ -275,7 +294,7 @@ class HealthConnectManager(private val context: Context) {
             pageToken = response.pageToken
         } while (pageToken != null)
 
-        return sessions.map { session ->
+        val summaries = sessions.map { session ->
             val workoutRange = TimeRangeFilter.between(session.startTime, session.endTime)
             val heartRate = client.aggregate(
                 AggregateRequest(
@@ -293,6 +312,7 @@ class HealthConnectManager(private val context: Context) {
                 maximumHeartRate = heartRate[HeartRateRecord.BPM_MAX]?.toInt()
             )
         }
+        return summaries to sessions.map { it.startTime to it.endTime }
     }
 
     private fun exerciseTypeName(type: Int): String {
@@ -309,32 +329,40 @@ class HealthConnectManager(private val context: Context) {
             .replaceFirstChar { it.uppercase() }
     }
 
-    data class SleepData(
-        val durationMinutes: Long,
-        val start: String,
-        val end: String,
-    )
+    private suspend fun readSleepSessions(range: TimeRangeFilter): List<Pair<Instant, Instant>> {
+        val sessions = mutableListOf<Pair<Instant, Instant>>()
+        var pageToken: String? = null
+        do {
+            val response = client.readRecords(
+                ReadRecordsRequest(
+                    recordType = SleepSessionRecord::class,
+                    timeRangeFilter = range,
+                    ascendingOrder = true,
+                    pageSize = PAGE_SIZE,
+                    pageToken = pageToken,
+                )
+            )
+            sessions += response.records.map { it.startTime to it.endTime }
+            pageToken = response.pageToken
+        } while (pageToken != null)
+        return sessions
+    }
 
-    private suspend fun readSleep(range: TimeRangeFilter): SleepData? {
-        val records = client.readRecords(
-            ReadRecordsRequest(
-                recordType = SleepSessionRecord::class,
+    private suspend fun readHeartSamples(range: TimeRangeFilter): List<Pair<Instant, Long>> {
+        val samples = mutableListOf<Pair<Instant, Long>>()
+        var pageToken: String? = null
+        do {
+            val response = client.readRecords(ReadRecordsRequest(
+                recordType = HeartRateRecord::class,
                 timeRangeFilter = range,
                 ascendingOrder = true,
-            )
-        ).records
-        val session = records.maxByOrNull { it.endTime } ?: return null
-
-        val durationMinutes = (session.endTime.toEpochMilli() - session.startTime.toEpochMilli()) / 60000
-        val zone = ZoneId.of("Europe/Stockholm")
-        val localStart = ZonedDateTime.ofInstant(session.startTime, zone)
-        val localEnd = ZonedDateTime.ofInstant(session.endTime, zone)
-
-        return SleepData(
-            durationMinutes = durationMinutes,
-            start = localStart.toString(),
-            end = localEnd.toString(),
-        )
+                pageSize = PAGE_SIZE,
+                pageToken = pageToken,
+            ))
+            samples += response.records.flatMap { record -> record.samples.map { it.time to it.beatsPerMinute } }
+            pageToken = response.pageToken
+        } while (pageToken != null)
+        return samples
     }
 
     companion object {

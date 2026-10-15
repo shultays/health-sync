@@ -7,10 +7,10 @@ import org.junit.Test
 import java.time.LocalDate
 
 class SheetsClientTest {
-    private val header = listOf("Date", "Steps", "Exercise min", "Activity kcal", "Avg HR", "Total sleep h", "Distance km", "Awake HR", "Exercise HR", "Sleep HR")
+    private val header = listOf("Date", "Steps", "Exercise min", "Activity kcal", "Avg HR", "Total sleep h", "Distance km", "Awake HR", "Exercise HR", "Sleep HR", "Estirmated Calories Burned")
     private val cutoff = LocalDate.parse("2026-07-18")
     private fun snapshot(date: String = "2026-10-15", steps: Long? = 150) =
-        HealthSnapshot(date, steps, null, 999, null, null, null, null, null, null, emptyList())
+        HealthSnapshot(date, steps, null, null, null, null, null, null, null, null, emptyList())
     private fun existing(rows: List<List<Any>>, columns: List<String> = header): JSONArray = JSONArray()
         .put(JSONObject().put("values", JSONArray(listOf(columns) + rows)))
         .put(JSONObject().put("values", JSONArray(listOf(listOf("Date", "Start", "Type", "Duration min", "Avg HR", "Max HR")))))
@@ -48,7 +48,7 @@ class SheetsClientTest {
         val oldHeader = header.take(7)
         val saved = existing(listOf(listOf("2026-10-15", 150, "", "", "", "", 1.2)), oldHeader)
         val changes = SheetsClient.planChanges(saved, snapshot().copy(heartRateAwake = 65, heartRateExercise = 120, heartRateSleep = 55), cutoff)
-        assertEquals(setOf("Daily!H1", "Daily!I1", "Daily!J1", "Daily!H2", "Daily!I2", "Daily!J2"), changes.map { it.range }.toSet())
+        assertEquals(setOf("Daily!H1", "Daily!I1", "Daily!J1", "Daily!K1", "Daily!H2", "Daily!I2", "Daily!J2"), changes.map { it.range }.toSet())
         assertEquals(listOf(65), changes.first { it.range == "Daily!H2" }.rows.single())
         assertEquals(listOf(120), changes.first { it.range == "Daily!I2" }.rows.single())
         assertEquals(listOf(55), changes.first { it.range == "Daily!J2" }.rows.single())
@@ -93,7 +93,20 @@ class SheetsClientTest {
         val changes = SheetsClient.planChanges(existing(listOf(oldRow), legacyHeader), snapshot(), cutoff)
         assertEquals(listOf(""), changes.first { it.range == "Daily!E2" }.rows.single())
         assertEquals(listOf(""), changes.first { it.range == "Daily!J2" }.rows.single())
-        val migrated = listOf<Any>("2026-10-15", 150, 20, 70, "", 8.0, 1.2)
+        assertEquals(listOf(1900), changes.first { it.range == "Daily!K2" }.rows.single())
+        val migrated = listOf<Any>("2026-10-15", 150, 20, 70, "", 8.0, 1.2, "", "", "", 1900)
         assertTrue(SheetsClient.planChanges(existing(listOf(migrated)), snapshot(), cutoff).isEmpty())
     }
+    @Test fun totalCaloriesRequire100IncreaseAndPreserveMissingValues() {
+        val saved = existing(listOf(listOf("2026-10-15", 150, "", "", "", "", "", "", "", "", 1000)))
+        for (calories in listOf(null, 0L, 999L, 1000L, 1099L)) {
+            assertTrue("calories=$calories", SheetsClient.planChanges(saved, snapshot().copy(caloriesTotal = calories), cutoff).isEmpty())
+        }
+        val changes = SheetsClient.planChanges(saved, snapshot().copy(caloriesTotal = 1100), cutoff)
+        assertEquals(listOf("Daily!K2"), changes.map { it.range })
+        assertEquals(1100L, changes.single().rows.single().single())
+        val initial = SheetsClient.planChanges(existing(listOf(listOf("2026-10-15", 150))), snapshot().copy(caloriesTotal = 50), cutoff)
+        assertEquals(50L, initial.single().rows.single().single())
+    }
+
 }

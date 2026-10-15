@@ -212,7 +212,7 @@ class HealthConnectManager(private val context: Context) {
             // Calories and heart rate may be written by a different app than steps.
             caloriesActive = allSourcesResult[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]
                 ?.inKilocalories,
-            caloriesTotal = result[TotalCaloriesBurnedRecord.ENERGY_TOTAL]
+            caloriesTotal = allSourcesResult[TotalCaloriesBurnedRecord.ENERGY_TOTAL]
                 ?.inKilocalories
                 ?.toLong(),
             heartRateResting = allSourcesResult[RestingHeartRateRecord.BPM_AVG]?.toInt(),

@@ -148,7 +148,7 @@ The APK artifact is uploaded to the workflow run.
 
 Daily rows are matched by Stockholm date, so a new day gets its own row.
 Only changed cells are written; an unchanged sync does not edit the spreadsheet.
-Total kcal is no longer exported; existing sheets migrate on the next sync.
+Daily exports total calories (active plus resting energy) as `Estirmated Calories Burned` in column K, using all Health Connect sources. Existing `Total kcal` values migrate to this column on the next sync. The first available value is written immediately; later updates require an increase of at least 100 kcal. Missing or lower values preserve the saved total.
 Steps update only when they exceed the saved count by more than 100 (150 stays
 until at least 251). Missing daily values preserve previously exported values.
 

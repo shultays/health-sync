@@ -36,7 +36,8 @@ object SheetsClient {
         "Distance km",
         "Awake HR",
         "Exercise HR",
-        "Sleep HR"
+        "Sleep HR",
+        "Estirmated Calories Burned"
     )
     private val workoutHeader = listOf(
         "Date",
@@ -95,7 +96,7 @@ object SheetsClient {
             spreadsheetId,
             accessToken,
             listOf(
-                ValueRange("Daily!A1:J1", listOf(dailyHeader)),
+                ValueRange("Daily!A1:K1", listOf(dailyHeader)),
                 ValueRange("Workouts!A1:F1", listOf(workoutHeader))
             )
         )
@@ -122,6 +123,7 @@ object SheetsClient {
                 val aliases = when (name) {
                     "Activity kcal" -> setOf(name, "Active kcal")
                     "Total sleep h" -> setOf(name, "Sleep h")
+                    "Estirmated Calories Burned" -> setOf(name, "Total kcal")
                     else -> setOf(name)
                 }
                 val index = (0 until oldHeader.length()).firstOrNull { oldHeader.optString(it) in aliases }
@@ -151,6 +153,11 @@ object SheetsClient {
             val newSteps = incoming[1].toString().toDoubleOrNull()
             if (savedSteps != null && newSteps != null && newSteps <= savedSteps + 100) {
                 incoming[1] = saved[1]
+            }
+            val savedCalories = saved.getOrNull(10)?.toString()?.toDoubleOrNull()
+            val newCalories = incoming[10].toString().toDoubleOrNull()
+            if (savedCalories != null && newCalories != null && newCalories < savedCalories + 100) {
+                incoming[10] = saved[10]
             }
         }
         dailyByDate[snapshot.date] = incoming
@@ -223,7 +230,8 @@ object SheetsClient {
         snapshot.distanceMeters?.let { roundToTwoDecimals(it / 1000.0) } ?: "",
         snapshot.heartRateAwake ?: "",
         snapshot.heartRateExercise ?: "",
-        snapshot.heartRateSleep ?: ""
+        snapshot.heartRateSleep ?: "",
+        snapshot.caloriesTotal ?: ""
     )
 
     private fun workoutRow(workout: WorkoutSummary): List<Any> = listOf(
@@ -260,7 +268,7 @@ object SheetsClient {
 
     private fun getValues(spreadsheetId: String, accessToken: String): JSONArray {
         val url = "$API_BASE/$spreadsheetId/values:batchGet" +
-            "?ranges=Daily!A:J&ranges=Workouts!A:F"
+            "?ranges=Daily!A:K&ranges=Workouts!A:F"
         return requestJson(Request.Builder().url(url).get(), accessToken)
             .optJSONArray("valueRanges")
             ?: throw IOException("Google Sheets returned no sheet data.")
